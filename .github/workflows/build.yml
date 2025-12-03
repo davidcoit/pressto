@@ -13,9 +13,11 @@ jobs:
         include:
           - os: ubuntu-latest
             preset: linux-release
+            build_preset: linux-release
             cmake_args: -DCMAKE_BUILD_TYPE=Release
           - os: macos-13
             preset: macos-universal
+            build_preset: macos-universal
             cmake_args: -DSMTG_BUILD_EXAMPLES=OFF
           - os: windows-latest
             preset: windows-msvc
@@ -40,7 +42,8 @@ jobs:
             libfreetype6-dev \
             libxcb-util-dev \
             libxcb-cursor-dev \
-            libxcb-image0-dev
+            libxcb-image0-dev \
+            libxcb-keysyms1-dev
 
       - name: Configure
         run: cmake --preset ${{ matrix.preset }} ${{ matrix.cmake_args }}
