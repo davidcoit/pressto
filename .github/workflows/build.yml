@@ -15,17 +15,17 @@ jobs:
             preset: linux-release
             build_preset: linux-release
             cmake_args: -DCMAKE_BUILD_TYPE=Release
-            artifact_path: build/linux-release/PresstoCompressor_artefacts
+            artifact_path: /home/runner/work/pressto/pressto/build/linux-release
           - os: macos-13
             preset: macos-universal
             build_preset: macos-universal
             cmake_args: -DSMTG_BUILD_EXAMPLES=OFF
-            artifact_path: build/macos-universal/PresstoCompressor_artefacts
+            artifact_path: /Users/runner/work/pressto/pressto/build/macos-universal/VST3/Release
           - os: windows-latest
             preset: windows-msvc
             build_preset: windows-msvc-release
             cmake_args: -DSMTG_CREATE_PLUGIN_LINK=OFF
-            artifact_path: build/windows-msvc/PresstoCompressor_artefacts/Release
+            artifact_path: D:\a\pressto\pressto\build\windows-msvc\pressto\PresstoCompressor_artefacts\Release\VST3
 
     steps:
       - uses: actions/checkout@v4
