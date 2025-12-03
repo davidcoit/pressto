@@ -20,12 +20,12 @@ jobs:
             preset: macos-universal
             build_preset: macos-universal
             cmake_args: -DSMTG_BUILD_EXAMPLES=OFF
-            artifact_path: /Users/runner/work/pressto/pressto/build/macos-universal/
+            artifact_path: /Users/runner/work/pressto/pressto/build/macos-universal/pressto/PresstoCompressor_artefacts/Release/VST3/
           - os: windows-latest
             preset: windows-msvc
             build_preset: windows-msvc-release
             cmake_args: -DSMTG_CREATE_PLUGIN_LINK=OFF
-            artifact_path: D:\a\pressto\pressto\build\windows-msvc\pressto\PresstoCompressor_artefacts\Release\VST3
+            artifact_path: D:\a\pressto\pressto\build\windows-msvc\pressto\PresstoCompressor_artefacts\Release\VST3\
 
     steps:
       - uses: actions/checkout@v4
