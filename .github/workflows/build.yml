@@ -18,7 +18,7 @@ jobs:
             preset: macos-universal
             cmake_args: -DSMTG_BUILD_EXAMPLES=OFF
           - os: windows-latest
-            preset: windows-msvc-release
+            preset: windows-msvc
             cmake_args: -DSMTG_CREATE_PLUGIN_LINK=OFF
 
     steps:
