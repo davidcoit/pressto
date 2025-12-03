@@ -19,6 +19,7 @@ jobs:
             cmake_args: -DSMTG_BUILD_EXAMPLES=OFF
           - os: windows-latest
             preset: windows-msvc
+            build_preset: windows-msvc-release
             cmake_args: -DSMTG_CREATE_PLUGIN_LINK=OFF
 
     steps:
@@ -36,13 +37,16 @@ jobs:
             libxinerama-dev \
             libxrandr-dev \
             libxtst-dev \
-            libfreetype6-dev
+            libfreetype6-dev \
+            libxcb-util-dev \
+            libxcb-cursor-dev \
+            libxcb-image0-dev
 
       - name: Configure
         run: cmake --preset ${{ matrix.preset }} ${{ matrix.cmake_args }}
 
       - name: Build
-        run: cmake --build --preset ${{ matrix.preset }}
+        run: cmake --build --preset ${{ matrix.build_preset }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
