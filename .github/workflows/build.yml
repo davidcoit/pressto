@@ -35,7 +35,8 @@ jobs:
             libxext-dev \
             libxinerama-dev \
             libxrandr-dev \
-            libxtst-dev
+            libxtst-dev \
+            libfreetype6-dev
 
       - name: Configure
         run: cmake --preset ${{ matrix.preset }} ${{ matrix.cmake_args }}
