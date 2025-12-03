@@ -15,12 +15,12 @@ jobs:
             preset: linux-release
             build_preset: linux-release
             cmake_args: -DCMAKE_BUILD_TYPE=Release
-            artifact_path: /home/runner/work/pressto/pressto/build/linux-release
+            artifact_path: /home/runner/work/pressto/pressto/build/linux-release/pressto/PresstoCompressor_artefacts/Release/VST3/
           - os: macos-13
             preset: macos-universal
             build_preset: macos-universal
             cmake_args: -DSMTG_BUILD_EXAMPLES=OFF
-            artifact_path: /Users/runner/work/pressto/pressto/build/macos-universal/VST3/Release
+            artifact_path: /Users/runner/work/pressto/pressto/build/macos-universal/
           - os: windows-latest
             preset: windows-msvc
             build_preset: windows-msvc-release
