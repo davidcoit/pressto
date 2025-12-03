@@ -20,7 +20,7 @@ jobs:
             preset: macos-universal
             build_preset: macos-universal
             cmake_args: -DSMTG_BUILD_EXAMPLES=OFF
-            artifact_path: /Users/runner/work/pressto/pressto/build/macos-universal/pressto/PresstoCompressor_artefacts
+            artifact_path: /Users/runner/Library/Audio/Plug-Ins/VST3/*.vst3
           - os: windows-latest
             preset: windows-msvc
             build_preset: windows-msvc-release
