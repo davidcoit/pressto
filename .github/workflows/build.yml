@@ -25,7 +25,7 @@ jobs:
             preset: windows-msvc
             build_preset: windows-msvc-release
             cmake_args: -DSMTG_CREATE_PLUGIN_LINK=OFF
-            artifact_path: build/windows-msvc/PresstoCompressor_artefacts
+            artifact_path: build/windows-msvc/PresstoCompressor_artefacts/Release
 
     steps:
       - uses: actions/checkout@v4
@@ -52,6 +52,7 @@ jobs:
             libxcb-image0-dev \
             libxcb-keysyms1-dev \
             libxcb-xkb-dev \
+            libxkbcommon-x11-dev \
             libglib2.0-dev \
             libgtk-3-dev \
             libglu1-mesa-dev \
