@@ -24,6 +24,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install Linux deps
+        if: matrix.os == 'ubuntu-latest'
+        run: sudo apt-get update && sudo apt-get install -y \
+             libx11-dev libxcomposite-dev libxcursor-dev libxext-dev \
+             libxinerama-dev libxrandr-dev libxtst-dev
+
       - name: Configure
         run: cmake --preset ${{ matrix.preset }} ${{ matrix.cmake_args }}
 
