@@ -35,29 +35,33 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
+            build-essential \
+            freeglut3-dev \
             libasound2-dev \
-            libjack-jackd2-dev \
-            ladspa-sdk \
             libcurl4-openssl-dev \
+            libfreetype6-dev \
+            libglib2.0-dev \
+            libglu1-mesa-dev \
+            libgtk-3-dev \
+            libjack-jackd2-dev \
+            libpulse-dev \
+            libwebkit2gtk-4.0-dev \
+            libxcb-cursor-dev \
+            libxcb-image0-dev \
+            libxcb-keysyms1-dev \
+            libxcb-util-dev \
             libx11-dev \
             libxcomposite-dev \
             libxcursor-dev \
             libxext-dev \
             libxinerama-dev \
+            libxkbcommon-x11-dev \
             libxrandr-dev \
             libxtst-dev \
-            libfreetype6-dev \
-            libxcb-util-dev \
-            libxcb-cursor-dev \
-            libxcb-image0-dev \
-            libxcb-keysyms1-dev \
-            libxcb-xkb-dev \
-            libxkbcommon-x11-dev \
-            libglib2.0-dev \
-            libgtk-3-dev \
-            libglu1-mesa-dev \
-            freeglut3-dev \
+            ladspa-sdk \
             mesa-common-dev \
+            ninja-build \
+            pkg-config
 
       - name: Configure
         run: cmake --preset ${{ matrix.preset }} ${{ matrix.cmake_args }}
