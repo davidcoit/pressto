@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push: { branches: [main] }
+  pull_request: { branches: [main] }
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            preset: linux-release
+            cmake_args: -DCMAKE_BUILD_TYPE=Release
+          - os: macos-latest
+            preset: macos-universal
+            cmake_args: -DSMTG_BUILD_EXAMPLES=OFF
+          - os: windows-latest
+            preset: windows-msvc
+            cmake_args: -DSMTG_CREATE_PLUGIN_LINK=OFF
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake --preset ${{ matrix.preset }} ${{ matrix.cmake_args }}
+
+      - name: Build
+        run: cmake --build --preset ${{ matrix.preset }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pressto-${{ matrix.os }}
+          path: build/${{ matrix.preset }}/PresstoCompressor_artefacts/
