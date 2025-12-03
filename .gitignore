@@ -1,0 +1,19 @@
+# Build artifacts
+build/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+*.ninja
+*.ninja_deps
+*.ninja_log
+
+# CMake convenience files
+CMakeUserPresets.json
+
+# macOS / Windows cruft
+.DS_Store
+Thumbs.db
+
+# Local installers / logs
+vs_BuildTools.exe
+*.log
