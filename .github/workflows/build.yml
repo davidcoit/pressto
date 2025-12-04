@@ -1,0 +1,79 @@
+name: CI
+
+on:
+  push: { branches: [main] }
+  pull_request: { branches: [main] }
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            preset: linux-release
+            build_preset: linux-release
+            cmake_args: -DCMAKE_BUILD_TYPE=Release
+            artifact_path: /home/runner/work/pressto/pressto/build/linux-release/pressto/PresstoCompressor_artefacts/Release/VST3
+          - os: macos-13
+            preset: macos-universal
+            build_preset: macos-universal
+            cmake_args: -DSMTG_ENABLE_VST3_PLUGIN_EXAMPLES=OFF -DSMTG_ENABLE_VST3_HOSTING_EXAMPLES=OFF -DSMTG_ADD_VST3_UTILITIES=OFF -DSMTG_RUN_VST_VALIDATOR=OFF -DCMAKE_EXE_LINKER_FLAGS="-Wl,-weak_reference_mismatches,weak" 
+            artifact_path: /Users/runner/work/pressto/pressto/build/macos-universal/pressto/PresstoCompressor_artefacts/Release/VST3/Pressto Compressor.vst3
+          - os: windows-latest
+            preset: windows-msvc
+            build_preset: windows-msvc-release
+            cmake_args: -DSMTG_CREATE_PLUGIN_LINK=OFF
+            artifact_path: D:\a\pressto\pressto\build\windows-msvc\pressto\PresstoCompressor_artefacts\Release\VST3
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux deps
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y software-properties-common
+          sudo add-apt-repository universe
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            freeglut3-dev \
+            libasound2-dev \
+            libcurl4-openssl-dev \
+            libfreetype6-dev \
+            libglib2.0-dev \
+            libglu1-mesa-dev \
+            libgtk-3-dev \
+            libgtkmm-3.0-dev \
+            libjack-jackd2-dev \
+            libpulse-dev \
+            libxcb-cursor-dev \
+            libxcb-image0-dev \
+            libxcb-keysyms1-dev \
+            libxcb-util-dev \
+            libx11-dev \
+            libxcomposite-dev \
+            libxcursor-dev \
+            libxext-dev \
+            libxinerama-dev \
+            libxkbcommon-x11-dev \
+            libxrandr-dev \
+            libxtst-dev \
+            ladspa-sdk \
+            mesa-common-dev \
+            ninja-build \
+            pkg-config
+
+      - name: Configure
+        run: cmake --preset ${{ matrix.preset }} ${{ matrix.cmake_args }}
+
+      - name: Build
+        run: cmake --build --preset ${{ matrix.build_preset }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pressto-${{ matrix.os }}
+          path: ${{ matrix.artifact_path }}
