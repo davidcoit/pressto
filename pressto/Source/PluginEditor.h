@@ -1,52 +1,62 @@
 #pragma once
 
-#include <juce_gui_extra/juce_gui_extra.h>
-#include "PluginProcessor.h"
-#include "MeterComponent.h"
+#include <juce_audio_processors/juce_audio_processors.h>
+#include <juce_gui_basics/juce_gui_basics.h>
 
-class PresstoAudioProcessorEditor : public juce::AudioProcessorEditor
+#include "PluginProcessor.h"
+#include "PresstoLookAndFeel.h"
+#include "UIComponents.h"
+
+// All controls live on a fixed-size canvas that is scaled as a whole when the
+// editor is resized, so the layout stays pixel-consistent at any size.
+class PresstoCanvas : public juce::Component
+{
+public:
+    static constexpr int baseWidth = 940;
+    static constexpr int baseHeight = 560;
+
+    explicit PresstoCanvas(PresstoAudioProcessor&);
+
+    void paint(juce::Graphics&) override;
+    void resized() override;
+
+    void refreshMeters(float dtSeconds);
+
+private:
+    PresstoAudioProcessor& processor;
+
+    Knob threshold, ratio, knee, attack, release;
+    Knob program, scHpf, input, makeup, mix;
+
+    juce::TextButton linkButton { "STEREO LINK" }, bypassButton { "BYPASS" };
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> linkAttachment, bypassAttachment;
+
+    LevelMeter inputMeter { "IN", true }, outputMeter { "OUT", false };
+    GainReductionMeter grMeter;
+    TransferDisplay transfer;
+    GainReductionHistory history;
+
+    juce::Rectangle<float> knobPanel, header;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(PresstoCanvas)
+};
+
+class PresstoAudioProcessorEditor : public juce::AudioProcessorEditor, private juce::Timer
 {
 public:
     explicit PresstoAudioProcessorEditor(PresstoAudioProcessor&);
-    ~PresstoAudioProcessorEditor() override = default;
+    ~PresstoAudioProcessorEditor() override;
 
     void paint(juce::Graphics&) override;
     void resized() override;
 
 private:
-    void configureSlider(juce::Slider& slider);
+    void timerCallback() override;
 
-    PresstoAudioProcessor& audioProcessor;
-
-    juce::Slider inputSlider;
-    juce::Slider thresholdSlider;
-    juce::Slider ratioSlider;
-    juce::Slider kneeSlider;
-    juce::Slider attackSlider;
-    juce::Slider releaseSlider;
-    juce::Slider makeupSlider;
-
-    juce::Label inputLabel;
-    juce::Label thresholdLabel;
-    juce::Label ratioLabel;
-    juce::Label kneeLabel;
-    juce::Label attackLabel;
-    juce::Label releaseLabel;
-    juce::Label makeupLabel;
-
-    using SliderAttachment = juce::AudioProcessorValueTreeState::SliderAttachment;
-
-    std::unique_ptr<SliderAttachment> inputAttachment;
-    std::unique_ptr<SliderAttachment> thresholdAttachment;
-    std::unique_ptr<SliderAttachment> ratioAttachment;
-    std::unique_ptr<SliderAttachment> kneeAttachment;
-    std::unique_ptr<SliderAttachment> attackAttachment;
-    std::unique_ptr<SliderAttachment> releaseAttachment;
-    std::unique_ptr<SliderAttachment> makeupAttachment;
-
-    MeterComponent inputMeter;
-    MeterComponent outputMeter;
-    MeterComponent grMeter;
+    PresstoLookAndFeel lookAndFeel;
+    PresstoCanvas canvas;
+    juce::TooltipWindow tooltips { this, 600 };
+    double lastTick = 0.0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(PresstoAudioProcessorEditor)
 };

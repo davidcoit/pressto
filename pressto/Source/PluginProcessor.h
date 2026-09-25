@@ -3,7 +3,42 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <array>
 #include <atomic>
-#include <vector>
+
+#include "CompressorEngine.h"
+
+namespace ParamIDs
+{
+inline constexpr const char* input = "input";
+inline constexpr const char* threshold = "threshold";
+inline constexpr const char* ratio = "ratio";
+inline constexpr const char* knee = "knee";
+inline constexpr const char* attack = "attack";
+inline constexpr const char* release = "release";
+inline constexpr const char* program = "program";
+inline constexpr const char* scHpf = "schpf";
+inline constexpr const char* makeup = "makeup";
+inline constexpr const char* mix = "mix";
+inline constexpr const char* link = "link";
+inline constexpr const char* bypass = "bypass";
+} // namespace ParamIDs
+
+// Lock-free peak accumulator: the audio thread pushes maxima, the UI thread
+// takes (and resets) the maximum seen since its last read, so no peaks are lost
+// between repaints regardless of block size.
+class PeakAccumulator
+{
+public:
+    void push(float v) noexcept
+    {
+        auto current = value.load(std::memory_order_relaxed);
+        while (v > current && ! value.compare_exchange_weak(current, v, std::memory_order_relaxed)) {}
+    }
+
+    float take() noexcept { return value.exchange(0.0f, std::memory_order_relaxed); }
+
+private:
+    std::atomic<float> value { 0.0f };
+};
 
 class PresstoAudioProcessor : public juce::AudioProcessor
 {
@@ -13,15 +48,13 @@ public:
 
     void prepareToPlay(double sampleRate, int samplesPerBlock) override;
     void releaseResources() override;
-
-   #ifndef JucePlugin_PreferredChannelConfigurations
     bool isBusesLayoutSupported(const BusesLayout& layouts) const override;
-   #endif
 
     void processBlock(juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
+    using juce::AudioProcessor::processBlock;
 
     juce::AudioProcessorEditor* createEditor() override;
-    bool hasEditor() const override;
+    bool hasEditor() const override { return true; }
 
     const juce::String getName() const override { return JucePlugin_Name; }
 
@@ -39,38 +72,49 @@ public:
     void getStateInformation(juce::MemoryBlock& destData) override;
     void setStateInformation(const void* data, int sizeInBytes) override;
 
+    juce::AudioProcessorParameter* getBypassParameter() const override;
+
     juce::AudioProcessorValueTreeState& getApvts() noexcept { return apvts; }
 
-    float getInputMeterDb() const noexcept { return inputMeterDb.load(); }
-    float getOutputMeterDb() const noexcept { return outputMeterDb.load(); }
-    float getGainReductionDb() const noexcept { return gainReductionDb.load(); }
+    struct MeterReadings
+    {
+        std::array<float, 2> inputPeak {};  // linear
+        std::array<float, 2> outputPeak {}; // linear
+        float gainReductionDb = 0.0f;       // max since last read
+    };
 
-private:
+    // Called from the UI thread; returns the maxima since the previous call.
+    MeterReadings takeMeterReadings() noexcept;
+
+    // Static curve for the editor's transfer display (uses current parameters).
+    float getStaticReductionDb(float inputDb) const noexcept;
+
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
-    float computeGainReductionDb(float inputDb) const noexcept;
-    float timeToCoefficient(float timeMs) const noexcept;
-    void updateMeters(float inputPeak, float outputPeak, float gainReductionPeak) noexcept;
+private:
+    CompressorEngine::Settings readSettings() const noexcept;
 
     juce::AudioProcessorValueTreeState apvts;
 
-    std::atomic<float>* inputParam { nullptr };
-    std::atomic<float>* thresholdParam { nullptr };
-    std::atomic<float>* ratioParam { nullptr };
-    std::atomic<float>* attackParam { nullptr };
-    std::atomic<float>* releaseParam { nullptr };
-    std::atomic<float>* kneeParam { nullptr };
-    std::atomic<float>* makeupParam { nullptr };
+    std::atomic<float>* inputParam {};
+    std::atomic<float>* thresholdParam {};
+    std::atomic<float>* ratioParam {};
+    std::atomic<float>* kneeParam {};
+    std::atomic<float>* attackParam {};
+    std::atomic<float>* releaseParam {};
+    std::atomic<float>* programParam {};
+    std::atomic<float>* scHpfParam {};
+    std::atomic<float>* makeupParam {};
+    std::atomic<float>* mixParam {};
+    std::atomic<float>* linkParam {};
+    juce::AudioParameterBool* bypassParam {};
 
-    std::vector<float> gainSmoothDb;
-    double currentSampleRate { 44100.0 };
+    CompressorEngine engine;
 
-    std::atomic<float> inputMeterDb { -60.0f };
-    std::atomic<float> outputMeterDb { -60.0f };
-    std::atomic<float> gainReductionDb { 0.0f };
+    juce::SmoothedValue<float> inputGain, makeupGain, wetMix, processedAmount;
 
-    const float minMeterDb { -60.0f };
-    const float maxReductionDb { 48.0f };
+    std::array<PeakAccumulator, 2> inputPeaks, outputPeaks;
+    PeakAccumulator gainReductionPeak;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(PresstoAudioProcessor)
 };

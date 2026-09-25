@@ -1,45 +1,164 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 
-#include <algorithm>
 #include <cmath>
 
 namespace
 {
-constexpr float meterCeilingDb = 6.0f;
+constexpr float dbToGainFactor = 0.11512925464970229f; // ln(10) / 20
+
+float dbToGain(float db) noexcept { return std::exp(db * dbToGainFactor); }
+
+// ---- Parameter text formatting / parsing -----------------------------------
+
+juce::String formatDb(float v, bool showSign)
+{
+    return (showSign && v > 0.05f ? "+" : "") + juce::String(v, 1) + " dB";
 }
+
+juce::String formatTime(float ms)
+{
+    if (ms < 1.0f)
+        return juce::String(ms, 2) + " ms";
+    if (ms < 10.0f)
+        return juce::String(ms, 1) + " ms";
+    if (ms < 1000.0f)
+        return juce::String(juce::roundToInt(ms)) + " ms";
+    return juce::String(ms / 1000.0f, 2) + " s";
+}
+
+float parseTime(const juce::String& text)
+{
+    const auto t = text.trim().toLowerCase();
+    const auto value = t.getFloatValue();
+    const bool seconds = t.endsWith("s") && ! t.endsWith("ms");
+    return seconds ? value * 1000.0f : value;
+}
+
+juce::String formatRatio(float r)
+{
+    return (r < 10.0f ? juce::String(r, 1) : juce::String(juce::roundToInt(r))) + ":1";
+}
+
+juce::String formatHz(float hz)
+{
+    return hz <= 20.5f ? juce::String("Off") : juce::String(juce::roundToInt(hz)) + " Hz";
+}
+
+float parseHz(const juce::String& text)
+{
+    const auto t = text.trim().toLowerCase();
+    if (t.startsWith("off"))
+        return 20.0f;
+    const auto value = t.getFloatValue();
+    return t.endsWith("khz") || t.endsWith("k") ? value * 1000.0f : value;
+}
+
+juce::NormalisableRange<float> skewedRange(float min, float max, float interval, float centre)
+{
+    juce::NormalisableRange<float> range(min, max, interval);
+    range.setSkewForCentre(centre);
+    return range;
+}
+
+std::unique_ptr<juce::AudioParameterFloat> makeFloat(const char* id,
+                                                     const juce::String& name,
+                                                     juce::NormalisableRange<float> range,
+                                                     float defaultValue,
+                                                     const juce::String& label,
+                                                     std::function<juce::String(float)> toText,
+                                                     std::function<float(const juce::String&)> fromText = nullptr)
+{
+    auto attributes = juce::AudioParameterFloatAttributes()
+                          .withLabel(label)
+                          .withStringFromValueFunction([toText](float v, int) { return toText(v); });
+    if (fromText)
+        attributes = attributes.withValueFromStringFunction(fromText);
+
+    return std::make_unique<juce::AudioParameterFloat>(juce::ParameterID { id, 1 }, name, range, defaultValue, attributes);
+}
+} // namespace
 
 PresstoAudioProcessor::PresstoAudioProcessor()
-#ifndef JucePlugin_PreferredChannelConfigurations
     : juce::AudioProcessor(BusesProperties()
                                .withInput("Input", juce::AudioChannelSet::stereo(), true)
-                               .withOutput("Output", juce::AudioChannelSet::stereo(), true))
-#endif
-    , apvts(*this, nullptr, "Parameters", createParameterLayout())
+                               .withOutput("Output", juce::AudioChannelSet::stereo(), true)),
+      apvts(*this, nullptr, "Parameters", createParameterLayout())
 {
-    inputParam = apvts.getRawParameterValue("input");
-    thresholdParam = apvts.getRawParameterValue("threshold");
-    ratioParam = apvts.getRawParameterValue("ratio");
-    attackParam = apvts.getRawParameterValue("attack");
-    releaseParam = apvts.getRawParameterValue("release");
-    kneeParam = apvts.getRawParameterValue("knee");
-    makeupParam = apvts.getRawParameterValue("makeup");
+    inputParam = apvts.getRawParameterValue(ParamIDs::input);
+    thresholdParam = apvts.getRawParameterValue(ParamIDs::threshold);
+    ratioParam = apvts.getRawParameterValue(ParamIDs::ratio);
+    kneeParam = apvts.getRawParameterValue(ParamIDs::knee);
+    attackParam = apvts.getRawParameterValue(ParamIDs::attack);
+    releaseParam = apvts.getRawParameterValue(ParamIDs::release);
+    programParam = apvts.getRawParameterValue(ParamIDs::program);
+    scHpfParam = apvts.getRawParameterValue(ParamIDs::scHpf);
+    makeupParam = apvts.getRawParameterValue(ParamIDs::makeup);
+    mixParam = apvts.getRawParameterValue(ParamIDs::mix);
+    linkParam = apvts.getRawParameterValue(ParamIDs::link);
+    bypassParam = dynamic_cast<juce::AudioParameterBool*>(apvts.getParameter(ParamIDs::bypass));
+    jassert(bypassParam != nullptr);
 }
 
-void PresstoAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
+juce::AudioProcessorValueTreeState::ParameterLayout PresstoAudioProcessor::createParameterLayout()
 {
-    juce::ignoreUnused(samplesPerBlock);
-    currentSampleRate = sampleRate;
-    const auto numChannels = juce::jmax(1, getTotalNumOutputChannels());
-    gainSmoothDb.assign(static_cast<size_t>(numChannels), 0.0f);
+    juce::AudioProcessorValueTreeState::ParameterLayout layout;
+
+    const auto db = [](float v) { return formatDb(v, false); };
+    const auto dbSigned = [](float v) { return formatDb(v, true); };
+    const auto percent = [](float v) { return juce::String(juce::roundToInt(v)) + " %"; };
+
+    layout.add(makeFloat(ParamIDs::input, "Input", { -24.0f, 24.0f, 0.1f }, 0.0f, "dB", dbSigned));
+    layout.add(makeFloat(ParamIDs::threshold, "Threshold", { -60.0f, 0.0f, 0.1f }, -18.0f, "dB", db));
+    layout.add(makeFloat(ParamIDs::ratio, "Ratio", skewedRange(1.0f, 20.0f, 0.01f, 4.0f), 4.0f, ":1", formatRatio));
+    layout.add(makeFloat(ParamIDs::knee, "Knee", { 0.0f, 24.0f, 0.1f }, 6.0f, "dB", db));
+    layout.add(makeFloat(ParamIDs::attack, "Attack", skewedRange(0.1f, 50.0f, 0.01f, 3.0f), 3.0f, "ms", formatTime, parseTime));
+    layout.add(makeFloat(ParamIDs::release, "Release", skewedRange(20.0f, 2000.0f, 1.0f, 200.0f), 150.0f, "ms", formatTime, parseTime));
+    layout.add(makeFloat(ParamIDs::program, "Program", { 0.0f, 100.0f, 1.0f }, 60.0f, "%", percent));
+    layout.add(makeFloat(ParamIDs::scHpf, "SC HPF", skewedRange(20.0f, 500.0f, 1.0f, 100.0f), 20.0f, "Hz", formatHz, parseHz));
+    layout.add(makeFloat(ParamIDs::makeup, "Makeup", { -12.0f, 24.0f, 0.1f }, 0.0f, "dB", dbSigned));
+    layout.add(makeFloat(ParamIDs::mix, "Mix", { 0.0f, 100.0f, 1.0f }, 100.0f, "%", percent));
+
+    layout.add(std::make_unique<juce::AudioParameterBool>(juce::ParameterID { ParamIDs::link, 1 }, "Stereo Link", true));
+    layout.add(std::make_unique<juce::AudioParameterBool>(juce::ParameterID { ParamIDs::bypass, 1 }, "Bypass", false));
+
+    return layout;
+}
+
+CompressorEngine::Settings PresstoAudioProcessor::readSettings() const noexcept
+{
+    CompressorEngine::Settings s;
+    s.thresholdDb = thresholdParam->load();
+    s.ratio = ratioParam->load();
+    s.kneeDb = kneeParam->load();
+    s.attackMs = attackParam->load();
+    s.releaseMs = releaseParam->load();
+    s.program = programParam->load() * 0.01f;
+    s.sidechainHpfHz = scHpfParam->load();
+    s.stereoLink = linkParam->load() >= 0.5f;
+    return s;
+}
+
+void PresstoAudioProcessor::prepareToPlay(double sampleRate, int)
+{
+    engine.prepare(sampleRate);
+    engine.setSettings(readSettings(), true);
+
+    constexpr double smoothingSeconds = 0.02;
+    for (auto* smoother : { &inputGain, &makeupGain, &wetMix, &processedAmount })
+        smoother->reset(sampleRate, smoothingSeconds);
+
+    inputGain.setCurrentAndTargetValue(dbToGain(inputParam->load()));
+    makeupGain.setCurrentAndTargetValue(dbToGain(makeupParam->load()));
+    wetMix.setCurrentAndTargetValue(mixParam->load() * 0.01f);
+    processedAmount.setCurrentAndTargetValue(bypassParam->get() ? 0.0f : 1.0f);
 }
 
 void PresstoAudioProcessor::releaseResources()
 {
-    std::fill(gainSmoothDb.begin(), gainSmoothDb.end(), 0.0f);
+    engine.reset();
 }
 
-#ifndef JucePlugin_PreferredChannelConfigurations
 bool PresstoAudioProcessor::isBusesLayoutSupported(const BusesLayout& layouts) const
 {
     const auto mainOut = layouts.getMainOutputChannelSet();
@@ -47,85 +166,99 @@ bool PresstoAudioProcessor::isBusesLayoutSupported(const BusesLayout& layouts) c
     if (mainOut != juce::AudioChannelSet::mono() && mainOut != juce::AudioChannelSet::stereo())
         return false;
 
-   #if ! JucePlugin_IsSynth
-    if (mainOut != layouts.getMainInputChannelSet())
-        return false;
-   #endif
-
-    return true;
+    return mainOut == layouts.getMainInputChannelSet();
 }
-#endif
 
-void PresstoAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages)
+void PresstoAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
 {
     juce::ScopedNoDenormals noDenormals;
-    juce::ignoreUnused(midiMessages);
 
-    const auto totalNumInputChannels = getTotalNumInputChannels();
-    const auto totalNumOutputChannels = getTotalNumOutputChannels();
-    const auto numSamples = buffer.getNumSamples();
+    const int numInputs = getTotalNumInputChannels();
+    const int numSamples = buffer.getNumSamples();
 
-    for (int channel = totalNumInputChannels; channel < totalNumOutputChannels; ++channel)
-        buffer.clear(channel, 0, numSamples);
+    for (int ch = numInputs; ch < getTotalNumOutputChannels(); ++ch)
+        buffer.clear(ch, 0, numSamples);
 
-    if (static_cast<int>(gainSmoothDb.size()) < totalNumOutputChannels)
-        gainSmoothDb.resize((size_t) totalNumOutputChannels, 0.0f);
+    const int numChannels = juce::jmin(numInputs, CompressorEngine::maxChannels);
+    if (numChannels == 0 || numSamples == 0)
+        return;
 
-    const auto attackMs = attackParam->load();
-    const auto releaseMs = releaseParam->load();
-    const float inputTrim = juce::Decibels::decibelsToGain(inputParam->load());
-    const float makeup = juce::Decibels::decibelsToGain(makeupParam->load());
+    engine.setSettings(readSettings());
+    inputGain.setTargetValue(dbToGain(inputParam->load()));
+    makeupGain.setTargetValue(dbToGain(makeupParam->load()));
+    wetMix.setTargetValue(mixParam->load() * 0.01f);
+    processedAmount.setTargetValue(bypassParam->get() ? 0.0f : 1.0f);
 
-    const float attackCoeff = timeToCoefficient(attackMs);
-    const float releaseCoeff = timeToCoefficient(releaseMs);
-    const float baseReleaseWeight = 1.0f - releaseCoeff;
+    std::array<float*, CompressorEngine::maxChannels> data {};
+    for (int ch = 0; ch < numChannels; ++ch)
+        data[(size_t) ch] = buffer.getWritePointer(ch);
 
-    float inputPeak = 0.0f;
-    float outputPeak = 0.0f;
+    std::array<float, 2> inPeak {}, outPeak {};
     float grPeak = 0.0f;
+    float trimmed[CompressorEngine::maxChannels] {};
+    float reductionDb[CompressorEngine::maxChannels] {};
 
-    for (int channel = 0; channel < totalNumInputChannels; ++channel)
+    for (int i = 0; i < numSamples; ++i)
     {
-        auto* channelData = buffer.getWritePointer(channel);
-        auto& gainDb = gainSmoothDb[(size_t) channel];
+        const float inGain = inputGain.getNextValue();
+        const float outGain = makeupGain.getNextValue();
+        const float mix = wetMix.getNextValue();
+        const float amount = processedAmount.getNextValue();
 
-        for (int sample = 0; sample < numSamples; ++sample)
+        for (int ch = 0; ch < numChannels; ++ch)
+            trimmed[ch] = data[(size_t) ch][i] * inGain;
+
+        engine.processFrame(trimmed, numChannels, reductionDb);
+
+        for (int ch = 0; ch < numChannels; ++ch)
         {
-            const float drySample = channelData[sample];
-            const float trimmedSample = drySample * inputTrim;
-            const float detectorInput = std::abs(trimmedSample) + 1.0e-8f;
-            const float detectorDb = juce::Decibels::gainToDecibels(detectorInput);
-            const float targetGainDb = computeGainReductionDb(detectorDb);
+            const float dry = data[(size_t) ch][i];
+            const float compressed = trimmed[ch] * dbToGain(-reductionDb[ch]);
+            const float processed = (trimmed[ch] + mix * (compressed - trimmed[ch])) * outGain;
+            const float out = dry + amount * (processed - dry);
+            data[(size_t) ch][i] = out;
 
-            if (targetGainDb < gainDb)
-            {
-                gainDb = attackCoeff * (gainDb - targetGainDb) + targetGainDb;
-            }
-            else
-            {
-                const float normalised = juce::jlimit(0.0f, 1.0f, std::abs(gainDb) / maxReductionDb);
-                const float curve = 1.0f - (normalised * normalised);
-                const float releaseShape = juce::jlimit(0.05f, 1.0f, curve + 0.05f);
-                const float weight = baseReleaseWeight * releaseShape;
-                gainDb += weight * (targetGainDb - gainDb);
-            }
-
-            const float gainLinear = juce::Decibels::decibelsToGain(gainDb);
-            const float processed = trimmedSample * gainLinear * makeup;
-            channelData[sample] = processed;
-
-            inputPeak = juce::jmax(inputPeak, std::abs(trimmedSample));
-            outputPeak = juce::jmax(outputPeak, std::abs(processed));
-            grPeak = juce::jmax(grPeak, -gainDb);
+            inPeak[(size_t) ch] = juce::jmax(inPeak[(size_t) ch], std::abs(trimmed[ch]));
+            outPeak[(size_t) ch] = juce::jmax(outPeak[(size_t) ch], std::abs(out));
+            grPeak = juce::jmax(grPeak, reductionDb[ch] * amount);
         }
     }
 
-    updateMeters(inputPeak, outputPeak, grPeak);
+    // Mono: mirror onto both meter channels.
+    if (numChannels == 1)
+    {
+        inPeak[1] = inPeak[0];
+        outPeak[1] = outPeak[0];
+    }
+
+    for (size_t ch = 0; ch < 2; ++ch)
+    {
+        inputPeaks[ch].push(inPeak[ch]);
+        outputPeaks[ch].push(outPeak[ch]);
+    }
+    gainReductionPeak.push(grPeak);
 }
 
-bool PresstoAudioProcessor::hasEditor() const
+PresstoAudioProcessor::MeterReadings PresstoAudioProcessor::takeMeterReadings() noexcept
 {
-    return true;
+    MeterReadings r;
+    for (size_t ch = 0; ch < 2; ++ch)
+    {
+        r.inputPeak[ch] = inputPeaks[ch].take();
+        r.outputPeak[ch] = outputPeaks[ch].take();
+    }
+    r.gainReductionDb = gainReductionPeak.take();
+    return r;
+}
+
+float PresstoAudioProcessor::getStaticReductionDb(float inputDb) const noexcept
+{
+    return CompressorEngine::staticReduction(readSettings(), inputDb);
+}
+
+juce::AudioProcessorParameter* PresstoAudioProcessor::getBypassParameter() const
+{
+    return bypassParam;
 }
 
 juce::AudioProcessorEditor* PresstoAudioProcessor::createEditor()
@@ -136,119 +269,15 @@ juce::AudioProcessorEditor* PresstoAudioProcessor::createEditor()
 void PresstoAudioProcessor::getStateInformation(juce::MemoryBlock& destData)
 {
     auto state = apvts.copyState();
-    std::unique_ptr<juce::XmlElement> xml(state.createXml());
-    copyXmlToBinary(*xml, destData);
+    if (auto xml = state.createXml())
+        copyXmlToBinary(*xml, destData);
 }
 
 void PresstoAudioProcessor::setStateInformation(const void* data, int sizeInBytes)
 {
-    std::unique_ptr<juce::XmlElement> xml(getXmlFromBinary(data, sizeInBytes));
-
-    if (xml != nullptr)
-        apvts.replaceState(juce::ValueTree::fromXml(*xml));
-}
-
-juce::AudioProcessorValueTreeState::ParameterLayout PresstoAudioProcessor::createParameterLayout()
-{
-    std::vector<std::unique_ptr<juce::RangedAudioParameter>> params;
-
-    params.push_back(std::make_unique<juce::AudioParameterFloat>(
-        "input", "Input",
-        juce::NormalisableRange<float>(-24.0f, 24.0f, 0.1f), 0.0f,
-        juce::String(), juce::AudioProcessorParameter::genericParameter,
-        [](float value, int) { return juce::String(value, 1) + " dB"; },
-        nullptr));
-
-    params.push_back(std::make_unique<juce::AudioParameterFloat>(
-        "threshold", "Threshold",
-        juce::NormalisableRange<float>(-60.0f, 0.0f, 0.1f), -24.0f,
-        juce::String(), juce::AudioProcessorParameter::genericParameter,
-        [](float value, int) { return juce::String(value, 1) + " dB"; },
-        nullptr));
-
-    juce::NormalisableRange<float> ratioRange { 1.0f, 20.0f, 0.01f, 0.35f };
-    params.push_back(std::make_unique<juce::AudioParameterFloat>(
-        "ratio", "Ratio",
-        ratioRange, 4.0f,
-        juce::String(), juce::AudioProcessorParameter::genericParameter,
-        [](float value, int) { return juce::String(value, 2) + ":1"; },
-        nullptr));
-
-    params.push_back(std::make_unique<juce::AudioParameterFloat>(
-        "attack", "Attack",
-        juce::NormalisableRange<float>(0.1f, 200.0f, 0.01f, 0.35f), 10.0f,
-        juce::String(), juce::AudioProcessorParameter::genericParameter,
-        [](float value, int) { return juce::String(value, 1) + " ms"; },
-        nullptr));
-
-    params.push_back(std::make_unique<juce::AudioParameterFloat>(
-        "release", "Release",
-        juce::NormalisableRange<float>(10.0f, 1500.0f, 0.1f, 0.35f), 250.0f,
-        juce::String(), juce::AudioProcessorParameter::genericParameter,
-        [](float value, int) { return juce::String(value, 1) + " ms"; },
-        nullptr));
-
-    params.push_back(std::make_unique<juce::AudioParameterFloat>(
-        "knee", "Knee",
-        juce::NormalisableRange<float>(0.0f, 24.0f, 0.1f), 6.0f,
-        juce::String(), juce::AudioProcessorParameter::genericParameter,
-        [](float value, int) { return juce::String(value, 1) + " dB"; },
-        nullptr));
-
-    params.push_back(std::make_unique<juce::AudioParameterFloat>(
-        "makeup", "Makeup",
-        juce::NormalisableRange<float>(-12.0f, 24.0f, 0.1f), 6.0f,
-        juce::String(), juce::AudioProcessorParameter::genericParameter,
-        [](float value, int) { return juce::String(value, 1) + " dB"; },
-        nullptr));
-
-    return { params.begin(), params.end() };
-}
-
-float PresstoAudioProcessor::computeGainReductionDb(float inputDb) const noexcept
-{
-    const float threshold = thresholdParam->load();
-    const float ratio = juce::jmax(1.0f, ratioParam->load());
-    const float knee = juce::jmax(0.0f, kneeParam->load());
-
-    const float delta = inputDb - threshold;
-    const float halfKnee = knee * 0.5f;
-    float reduction = 0.0f;
-
-    if (knee > 0.0f && delta > -halfKnee && delta < halfKnee)
-    {
-        const float kneePos = delta + halfKnee;
-        const float output = inputDb + (1.0f / ratio - 1.0f) * (kneePos * kneePos) / (2.0f * knee);
-        reduction = output - inputDb;
-    }
-    else if (delta >= halfKnee)
-    {
-        const float output = threshold + delta / ratio;
-        reduction = output - inputDb;
-    }
-
-    return juce::jlimit(-maxReductionDb, 0.0f, reduction);
-}
-
-float PresstoAudioProcessor::timeToCoefficient(float timeMs) const noexcept
-{
-    const float time = juce::jmax(0.1f, timeMs);
-    const auto samplesForTime = static_cast<float>(currentSampleRate) * (time * 0.001f);
-
-    if (samplesForTime <= 0.0f)
-        return 0.0f;
-
-    return std::exp(-1.0f / samplesForTime);
-}
-
-void PresstoAudioProcessor::updateMeters(float inputPeak, float outputPeak, float gainReductionPeak) noexcept
-{
-    const auto safeInput = juce::Decibels::gainToDecibels(inputPeak, minMeterDb);
-    const auto safeOutput = juce::Decibels::gainToDecibels(outputPeak, minMeterDb);
-
-    inputMeterDb.store(juce::jlimit(minMeterDb, meterCeilingDb, safeInput));
-    outputMeterDb.store(juce::jlimit(minMeterDb, meterCeilingDb, safeOutput));
-    gainReductionDb.store(juce::jlimit(0.0f, maxReductionDb, gainReductionPeak));
+    if (auto xml = getXmlFromBinary(data, sizeInBytes))
+        if (xml->hasTagName(apvts.state.getType()))
+            apvts.replaceState(juce::ValueTree::fromXml(*xml));
 }
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()

@@ -1,0 +1,123 @@
+name: Build & validate
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux
+            os: ubuntu-24.04
+            preset: linux-release
+            build-preset: linux-release
+            test-preset: linux-release
+            artefacts: build/linux-release/pressto/PresstoCompressor_artefacts/Release
+            pluginval: pluginval_Linux.zip
+          - name: macOS (universal)
+            os: macos-15
+            preset: macos-universal
+            build-preset: macos-universal
+            test-preset: macos-universal
+            artefacts: build/macos-universal/pressto/PresstoCompressor_artefacts/Release
+            pluginval: pluginval_macOS.zip
+          - name: Windows
+            os: windows-latest
+            preset: windows-msvc
+            build-preset: windows-msvc-release
+            test-preset: windows-msvc-release
+            artefacts: build/windows-msvc/pressto/PresstoCompressor_artefacts/Release
+            pluginval: pluginval_Windows.zip
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build xvfb \
+            libasound2-dev libfreetype-dev libfontconfig1-dev \
+            libx11-dev libxcomposite-dev libxcursor-dev libxext-dev \
+            libxinerama-dev libxrandr-dev libxrender-dev
+
+      - name: Install Ninja (macOS)
+        if: runner.os == 'macOS'
+        run: command -v ninja || brew install ninja
+
+      - name: Configure
+        run: cmake --preset ${{ matrix.preset }}
+
+      - name: Build
+        run: cmake --build --preset ${{ matrix.build-preset }} --parallel
+
+      - name: Unit + integration tests
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            xvfb-run -a ctest --preset ${{ matrix.test-preset }}
+          else
+            ctest --preset ${{ matrix.test-preset }}
+          fi
+
+      - name: Check macOS binaries are universal and signed
+        if: runner.os == 'macOS'
+        run: |
+          for bundle in "${{ matrix.artefacts }}/VST3/Pressto Compressor.vst3" \
+                        "${{ matrix.artefacts }}/AU/Pressto Compressor.component"; do
+            binary="$bundle/Contents/MacOS/Pressto Compressor"
+            lipo -archs "$binary"
+            lipo -archs "$binary" | grep -q arm64
+            lipo -archs "$binary" | grep -q x86_64
+            # Ad-hoc sign the whole bundle: arm64 hosts refuse unsigned code.
+            codesign --force --deep --sign - "$bundle"
+            codesign --verify --verbose "$bundle"
+          done
+
+      - name: Fetch pluginval
+        run: |
+          curl -sSL -o pluginval.zip "https://github.com/Tracktion/pluginval/releases/latest/download/${{ matrix.pluginval }}"
+          unzip -q pluginval.zip -d pluginval
+
+      - name: Validate VST3 with pluginval
+        run: |
+          case "$RUNNER_OS" in
+            Linux)   PV="xvfb-run -a pluginval/pluginval" ;;
+            macOS)   PV="pluginval/pluginval.app/Contents/MacOS/pluginval" ;;
+            Windows) PV="pluginval/pluginval.exe" ;;
+          esac
+          $PV --strictness-level 10 --validate-in-process --timeout-ms 600000 \
+              --validate "${{ matrix.artefacts }}/VST3/Pressto Compressor.vst3"
+
+      - name: Validate Audio Unit
+        if: runner.os == 'macOS'
+        run: |
+          mkdir -p ~/Library/Audio/Plug-Ins/Components
+          cp -R "${{ matrix.artefacts }}/AU/Pressto Compressor.component" ~/Library/Audio/Plug-Ins/Components/
+          killall -9 AudioComponentRegistrar 2>/dev/null || true
+          auval -v aufx PrsC PreS
+          pluginval/pluginval.app/Contents/MacOS/pluginval --strictness-level 10 --validate-in-process --timeout-ms 600000 \
+              --validate ~/Library/Audio/Plug-Ins/Components/"Pressto Compressor.component"
+
+      - name: Upload plugins
+        uses: actions/upload-artifact@v4
+        with:
+          name: Pressto-${{ runner.os }}
+          path: |
+            ${{ matrix.artefacts }}/VST3
+            ${{ matrix.artefacts }}/AU
+            ${{ matrix.artefacts }}/Standalone
+          if-no-files-found: error

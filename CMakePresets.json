@@ -1,76 +1,69 @@
 {
   "version": 3,
-  "cmakeMinimumRequired": {
-    "major": 3,
-    "minor": 22,
-    "patch": 0
-  },
+  "cmakeMinimumRequired": { "major": 3, "minor": 22, "patch": 0 },
   "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "FETCHCONTENT_BASE_DIR": "${sourceDir}/build/_deps"
+      }
+    },
     {
       "name": "linux-debug",
       "displayName": "Linux Debug (Ninja)",
+      "inherits": "base",
       "generator": "Ninja",
-      "binaryDir": "${sourceDir}/build/linux-debug",
-      "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Debug",
-        "PRESSTO_FETCH_VST3_SDK": "ON"
-      }
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" },
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Linux" }
     },
     {
       "name": "linux-release",
       "displayName": "Linux Release (Ninja)",
+      "inherits": "base",
       "generator": "Ninja",
-      "binaryDir": "${sourceDir}/build/linux-release",
-      "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Release",
-        "PRESSTO_FETCH_VST3_SDK": "ON"
-      }
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" },
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Linux" }
     },
     {
       "name": "macos-universal",
-      "displayName": "macOS Universal Release (Ninja)",
+      "displayName": "macOS Universal Release (Ninja, arm64 + x86_64)",
+      "inherits": "base",
       "generator": "Ninja",
-      "binaryDir": "${sourceDir}/build/macos-universal",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
-        "CMAKE_OSX_ARCHITECTURES": "arm64;x86_64",
-        "PRESSTO_FETCH_VST3_SDK": "ON"
-      }
+        "CMAKE_OSX_ARCHITECTURES": "arm64;x86_64"
+      },
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Darwin" }
+    },
+    {
+      "name": "macos-xcode",
+      "displayName": "macOS Universal (Xcode project)",
+      "inherits": "base",
+      "generator": "Xcode",
+      "cacheVariables": { "CMAKE_OSX_ARCHITECTURES": "arm64;x86_64" },
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Darwin" }
     },
     {
       "name": "windows-msvc",
-      "displayName": "Windows (Visual Studio 2022, x64 multi-config)",
-      "generator": "Visual Studio 17 2022",
-      "architecture": "x64",
-      "binaryDir": "${sourceDir}/build/windows-msvc",
-      "cacheVariables": {
-        "CMAKE_CONFIGURATION_TYPES": "Debug;Release",
-        "PRESSTO_FETCH_VST3_SDK": "ON"
-      }
+      "displayName": "Windows x64 (newest installed Visual Studio)",
+      "inherits": "base",
+      "architecture": { "value": "x64", "strategy": "set" },
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" }
     }
   ],
   "buildPresets": [
-    {
-      "name": "linux-debug",
-      "configurePreset": "linux-debug"
-    },
-    {
-      "name": "linux-release",
-      "configurePreset": "linux-release"
-    },
-    {
-      "name": "macos-universal",
-      "configurePreset": "macos-universal"
-    },
-    {
-      "name": "windows-msvc-debug",
-      "configurePreset": "windows-msvc",
-      "configuration": "Debug"
-    },
-    {
-      "name": "windows-msvc-release",
-      "configurePreset": "windows-msvc",
-      "configuration": "Release"
-    }
+    { "name": "linux-debug", "configurePreset": "linux-debug" },
+    { "name": "linux-release", "configurePreset": "linux-release" },
+    { "name": "macos-universal", "configurePreset": "macos-universal" },
+    { "name": "macos-xcode", "configurePreset": "macos-xcode", "configuration": "Release" },
+    { "name": "windows-msvc-debug", "configurePreset": "windows-msvc", "configuration": "Debug" },
+    { "name": "windows-msvc-release", "configurePreset": "windows-msvc", "configuration": "Release" }
+  ],
+  "testPresets": [
+    { "name": "linux-release", "configurePreset": "linux-release", "output": { "outputOnFailure": true } },
+    { "name": "macos-universal", "configurePreset": "macos-universal", "output": { "outputOnFailure": true } },
+    { "name": "windows-msvc-release", "configurePreset": "windows-msvc", "configuration": "Release", "output": { "outputOnFailure": true } }
   ]
 }
