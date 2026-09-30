@@ -118,7 +118,7 @@ int main(int argc, char** argv)
         collect(*editor, sliders);
         collect(*editor, buttons);
         check(sliders.size() == 10, "editor exposes 10 knobs (found " + juce::String(sliders.size()) + ")");
-        check(buttons.size() == 2, "editor exposes 2 buttons (found " + juce::String(buttons.size()) + ")");
+        check(buttons.size() == 3, "editor exposes 3 buttons (found " + juce::String(buttons.size()) + ")");
 
         juce::StringArray covered;
         for (auto* slider : sliders)
@@ -194,6 +194,30 @@ int main(int argc, char** argv)
             if (slider->getTitle() == "Ratio")
                 check(std::abs(slider->getValueFromText("8:1") - 8.0) < 0.01, "Ratio accepts '8:1'");
         }
+        // Mid/side disables Stereo Link (it doesn't apply) and splits the GR meter.
+        {
+            juce::Array<PresstoCanvas*> canvases;
+            collect(*editor, canvases);
+            juce::TextButton* linkButton = nullptr;
+            juce::TextButton* msButton = nullptr;
+            for (auto* b : buttons)
+            {
+                if (b->getButtonText() == "STEREO LINK") linkButton = b;
+                if (b->getButtonText() == "MID/SIDE") msButton = b;
+            }
+            check(canvases.size() == 1 && linkButton != nullptr && msButton != nullptr, "found canvas, link and mid/side buttons");
+            if (canvases.size() == 1 && linkButton != nullptr && msButton != nullptr)
+            {
+                setParam(processor, ParamIDs::midSide, 1.0f);
+                canvases[0]->refreshMeters(1.0f / 60.0f);
+                check(msButton->isEnabled() && msButton->getToggleState() && ! linkButton->isEnabled(),
+                      "mid/side ON (stereo): button lit, Stereo Link disabled");
+                setParam(processor, ParamIDs::midSide, 0.0f);
+                canvases[0]->refreshMeters(1.0f / 60.0f);
+                check(linkButton->isEnabled(), "mid/side OFF: Stereo Link enabled again");
+            }
+        }
+
         processor.editorBeingDeleted(editor.get()); // as a host wrapper would
     }
 
@@ -251,6 +275,131 @@ int main(int argc, char** argv)
         check(again.gainReductionDb <= 0.0f && again.inputPeak[0] <= 0.0f, "meter readings reset after being taken");
     }
 
+    // ---- 2b. Mid/side --------------------------------------------------------
+    {
+        // Renders a mid tone at midDb and a side tone at sideDb (L = M + S, R = M - S).
+        // Returns the peak of the decoded mid and side output over the final block, and
+        // the largest second difference |x[n] - 2x[n-1] + x[n-2]| of the left output after the first
+        // second. For low tones that is tiny, while any discontinuity (a click) shows up at full size.
+        struct MsResult { float mid, side, maxCurvature; };
+        const auto runMs = [](PresstoAudioProcessor& p, float seconds, float midDb, float sideDb,
+                              std::function<void(int block)> beforeBlock = nullptr,
+                              double midHz = 440.0, double sideHz = 1000.0)
+        {
+            juce::AudioBuffer<float> buffer(2, blockSize);
+            juce::MidiBuffer midi;
+            const float m = juce::Decibels::decibelsToGain(midDb, -200.0f);
+            const float sd = juce::Decibels::decibelsToGain(sideDb, -200.0f);
+            const int blocks = (int) (seconds * sampleRate / blockSize);
+            MsResult r { 0.0f, 0.0f, 0.0f };
+            float prev1 = 0.0f, prev2 = 0.0f;
+
+            for (int b = 0; b < blocks; ++b)
+            {
+                if (beforeBlock)
+                    beforeBlock(b);
+                for (int i = 0; i < blockSize; ++i)
+                {
+                    const double t = (double) (b * blockSize + i) / sampleRate;
+                    const float mid = m * (float) std::sin(juce::MathConstants<double>::twoPi * midHz * t);
+                    const float side = sd * (float) std::sin(juce::MathConstants<double>::twoPi * sideHz * t);
+                    buffer.setSample(0, i, mid + side);
+                    buffer.setSample(1, i, mid - side);
+                }
+                p.processBlock(buffer, midi);
+
+                r.mid = r.side = 0.0f;
+                for (int i = 0; i < blockSize; ++i)
+                {
+                    const float l = buffer.getSample(0, i), rr = buffer.getSample(1, i);
+                    r.mid = juce::jmax(r.mid, std::abs(0.5f * (l + rr)));
+                    r.side = juce::jmax(r.side, std::abs(0.5f * (l - rr)));
+                    if (b >= 100) // ignore the first second while the detector settles
+                        r.maxCurvature = juce::jmax(r.maxCurvature, std::abs(l - 2.0f * prev1 + prev2));
+                    prev2 = prev1;
+                    prev1 = l;
+                }
+            }
+            return r;
+        };
+
+        // Loud, wide side content over a quiet centre.
+        resetParams(processor);
+        processor.prepareToPlay(sampleRate, blockSize);
+        const auto lr = runMs(processor, 1.5f, -30.0f, -2.0f);
+
+        setParam(processor, ParamIDs::midSide, 1.0f);
+        processor.prepareToPlay(sampleRate, blockSize);
+        const auto ms = runMs(processor, 1.5f, -30.0f, -2.0f);
+        const auto msMeters = [&] { processor.takeMeterReadings(); runMs(processor, 0.1f, -30.0f, -2.0f); return processor.takeMeterReadings(); }();
+
+        check(db(lr.mid) < -36.0f, "L/R mode: loud side content also ducks the centre (" + juce::String(db(lr.mid), 1) + " dB)");
+        check(std::abs(db(ms.mid) + 30.0f) < 0.2f && db(ms.side) < -8.0f,
+              "M/S mode: centre untouched (" + juce::String(db(ms.mid), 1) + " dB), side compressed (" + juce::String(db(ms.side), 1) + " dB)");
+        check(msMeters.channelReductionDb[0] < 0.5f && msMeters.channelReductionDb[1] > 5.0f,
+              "M/S meters: M " + juce::String(msMeters.channelReductionDb[0], 1) + " dB, S " + juce::String(msMeters.channelReductionDb[1], 1) + " dB GR");
+
+        // Mono content (L == R): M/S gives the same result as linked L/R.
+        juce::AudioBuffer<float> inBuf, outLR, outMS;
+        setParam(processor, ParamIDs::midSide, 0.0f);
+        processor.prepareToPlay(sampleRate, blockSize);
+        runTone(processor, 1.0f, 0.0f, 0.0f, &inBuf, &outLR);
+        setParam(processor, ParamIDs::midSide, 1.0f);
+        processor.prepareToPlay(sampleRate, blockSize);
+        runTone(processor, 1.0f, 0.0f, 0.0f, &inBuf, &outMS);
+        float monoDiff = 0.0f;
+        for (int ch = 0; ch < 2; ++ch)
+            for (int i = 0; i < blockSize; ++i)
+                monoDiff = juce::jmax(monoDiff, std::abs(outLR.getSample(ch, i) - outMS.getSample(ch, i)));
+        check(monoDiff < 1.0e-5f, "mono content: M/S output matches linked L/R (max diff " + juce::String(monoDiff, 8) + ")");
+
+        // Switching modes while playing is click-free (20 ms crossfade between warm detectors).
+        // A hard switch would make the centre's gain jump by ~10 dB. 58.5 Hz puts both
+        // switch points mid-waveform rather than on a zero crossing.
+        resetParams(processor);
+        processor.prepareToPlay(sampleRate, blockSize);
+        const auto steady = runMs(processor, 3.0f, -20.0f, -2.0f, nullptr, 58.5, 90.0);
+        processor.prepareToPlay(sampleRate, blockSize);
+        const auto switched = runMs(processor, 3.0f, -20.0f, -2.0f, [&](int block)
+        {
+            if (block == 150)
+                setParam(processor, ParamIDs::midSide, 1.0f);
+            if (block == 225)
+                setParam(processor, ParamIDs::midSide, 0.0f);
+        }, 58.5, 90.0);
+        check(switched.maxCurvature < steady.maxCurvature * 10.0f, // a hard switch measures ~2500x
+              "switching M/S on and off mid-stream doesn't click (peak curvature " + juce::String(switched.maxCurvature, 6)
+                  + " vs steady " + juce::String(steady.maxCurvature, 6) + ")");
+        resetParams(processor);
+
+        // Mono track: the switch has no effect.
+        PresstoAudioProcessor monoProc;
+        juce::AudioProcessor::BusesLayout monoLayout;
+        monoLayout.inputBuses.add(juce::AudioChannelSet::mono());
+        monoLayout.outputBuses.add(juce::AudioChannelSet::mono());
+        check(monoProc.setBusesLayout(monoLayout), "mono layout accepted");
+        const auto runMono = [&](bool midSideOn)
+        {
+            setParam(monoProc, ParamIDs::midSide, midSideOn ? 1.0f : 0.0f);
+            monoProc.prepareToPlay(sampleRate, blockSize);
+            juce::AudioBuffer<float> b(1, blockSize);
+            juce::MidiBuffer midi;
+            for (int blk = 0; blk < 100; ++blk)
+            {
+                for (int i = 0; i < blockSize; ++i)
+                    b.setSample(0, i, (float) std::sin(juce::MathConstants<double>::twoPi * 1000.0 * (blk * blockSize + i) / sampleRate));
+                monoProc.processBlock(b, midi);
+            }
+            return b;
+        };
+        const auto monoOff = runMono(false);
+        const auto monoOn = runMono(true);
+        float monoTrackDiff = 0.0f;
+        for (int i = 0; i < blockSize; ++i)
+            monoTrackDiff = juce::jmax(monoTrackDiff, std::abs(monoOff.getSample(0, i) - monoOn.getSample(0, i)));
+        check(monoTrackDiff <= 0.0f && monoProc.getNumProcessedChannels() == 1, "mono track: Mid/Side has no effect");
+    }
+
     // ---- 3. State round-trip -----------------------------------------------
     {
         setParam(processor, ParamIDs::threshold, -31.0f);
@@ -306,6 +455,25 @@ int main(int argc, char** argv)
         check(writePng(*editor, 1.0f, snapshotDir.getChildFile("editor.png")), "wrote editor.png");
         editor->setSize(PresstoCanvas::baseWidth * 3 / 2, PresstoCanvas::baseHeight * 3 / 2);
         check(writePng(*editor, 1.0f, snapshotDir.getChildFile("editor-150.png")), "wrote editor-150.png (resized 150 %)");
+
+        // Mid/side with wide material.
+        editor->setSize(PresstoCanvas::baseWidth, PresstoCanvas::baseHeight);
+        setParam(processor, ParamIDs::midSide, 1.0f);
+        for (int frame = 0; frame < 240; ++frame)
+        {
+            for (int i = 0; i < buffer.getNumSamples(); ++i)
+            {
+                const int n = frame * 800 + i;
+                const float env = std::exp(-(float) (n % 24000) / 2500.0f);
+                const float mid = (rng.nextFloat() * 2.0f - 1.0f) * env * 0.5f;
+                const float side = 0.6f * (float) std::sin(juce::MathConstants<double>::twoPi * 330.0 * n / sampleRate);
+                buffer.setSample(0, i, mid + side);
+                buffer.setSample(1, i, mid - side);
+            }
+            processor.processBlock(buffer, midi);
+            canvas->refreshMeters(1.0f / 60.0f);
+        }
+        check(writePng(*editor, 1.0f, snapshotDir.getChildFile("editor-midside.png")), "wrote editor-midside.png");
         processor.editorBeingDeleted(editor.get());
     }
 

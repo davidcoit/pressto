@@ -37,6 +37,12 @@ PresstoCanvas::PresstoCanvas(PresstoAudioProcessor& p)
     linkButton.setColour(juce::TextButton::buttonOnColourId, Palette::link);
     linkButton.setTooltip("Stereo: both channels share one detector so the image never shifts. "
                           "Off: dual-mono, each channel is compressed independently.");
+    midSideButton.setClickingTogglesState(true);
+    midSideButton.setColour(juce::TextButton::buttonOnColourId, Palette::midSide);
+    midSideButton.setTooltip("Mid/side: compress the centre (mid) and the stereo width (side) independently. "
+                             "Only available on stereo tracks; Stereo Link does not apply in this mode.");
+    addAndMakeVisible(midSideButton);
+
     bypassButton.setClickingTogglesState(true);
     bypassButton.setColour(juce::TextButton::buttonOnColourId, Palette::bypass);
     bypassButton.setTooltip("Bypass (click-free, also available as the host's bypass).");
@@ -44,12 +50,17 @@ PresstoCanvas::PresstoCanvas(PresstoAudioProcessor& p)
     addAndMakeVisible(bypassButton);
 
     auto& apvts = p.getApvts();
+    midSideAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(apvts, ParamIDs::midSide, midSideButton);
     linkAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(apvts, ParamIDs::link, linkButton);
     bypassAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(apvts, ParamIDs::bypass, bypassButton);
 
     addAndMakeVisible(inputMeter);
     addAndMakeVisible(outputMeter);
     addAndMakeVisible(grMeter);
+
+    midSideParam = apvts.getRawParameterValue(ParamIDs::midSide);
+    linkParam = apvts.getRawParameterValue(ParamIDs::link);
+    updateModeControls();
     addAndMakeVisible(transfer);
     addAndMakeVisible(history);
 
@@ -99,6 +110,8 @@ void PresstoCanvas::resized()
     bypassButton.setBounds(headerControls.removeFromRight(104));
     headerControls.removeFromRight(10);
     linkButton.setBounds(headerControls.removeFromRight(132));
+    headerControls.removeFromRight(10);
+    midSideButton.setBounds(headerControls.removeFromRight(116));
 
     auto body = bounds.reduced(margin);
     body.removeFromTop(2);
@@ -107,7 +120,7 @@ void PresstoCanvas::resized()
     body.removeFromLeft(14);
     outputMeter.setBounds(body.removeFromRight(62));
     body.removeFromRight(10);
-    grMeter.setBounds(body.removeFromRight(36));
+    grMeter.setBounds(body.removeFromRight(44));
     body.removeFromRight(14);
 
     auto displays = body.removeFromTop(196);
@@ -131,13 +144,31 @@ void PresstoCanvas::resized()
     layoutRow(rows.withTrimmedTop(6), { &program, &scHpf, &input, &makeup, &mix });
 }
 
+void PresstoCanvas::updateModeControls()
+{
+    const bool stereo = processor.getNumProcessedChannels() == 2;
+    const bool midSide = stereo && midSideParam->load() >= 0.5f;
+    const bool linked = linkParam->load() >= 0.5f;
+
+    midSideButton.setEnabled(stereo);
+    linkButton.setEnabled(stereo && ! midSide);
+
+    if (midSide)
+        grMeter.setChannelLabels("M", "S");
+    else if (stereo && ! linked)
+        grMeter.setChannelLabels("L", "R");
+    else
+        grMeter.setChannelLabels({}, {});
+}
+
 void PresstoCanvas::refreshMeters(float dt)
 {
     const auto readings = processor.takeMeterReadings();
 
     inputMeter.update(readings.inputPeak, dt);
     outputMeter.update(readings.outputPeak, dt);
-    grMeter.update(readings.gainReductionDb, dt);
+    updateModeControls();
+    grMeter.update(readings.channelReductionDb, dt);
 
     const float inputPeak = juce::jmax(readings.inputPeak[0], readings.inputPeak[1]);
     const float inputDb = inputPeak > 0.0f ? 20.0f * std::log10(inputPeak) : -100.0f;

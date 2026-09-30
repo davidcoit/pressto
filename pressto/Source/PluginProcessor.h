@@ -19,6 +19,7 @@ inline constexpr const char* scHpf = "schpf";
 inline constexpr const char* makeup = "makeup";
 inline constexpr const char* mix = "mix";
 inline constexpr const char* link = "link";
+inline constexpr const char* midSide = "midside";
 inline constexpr const char* bypass = "bypass";
 } // namespace ParamIDs
 
@@ -80,11 +81,15 @@ public:
     {
         std::array<float, 2> inputPeak {};  // linear
         std::array<float, 2> outputPeak {}; // linear
-        float gainReductionDb = 0.0f;       // max since last read
+        float gainReductionDb = 0.0f;       // max over both channels since last read
+        std::array<float, 2> channelReductionDb {}; // per detector channel: L/R, or M/S in mid-side mode
     };
 
     // Called from the UI thread; returns the maxima since the previous call.
     MeterReadings takeMeterReadings() noexcept;
+
+    // Number of channels on the main bus as last processed (1 = mono, 2 = stereo).
+    int getNumProcessedChannels() const noexcept { return processedChannels.load(std::memory_order_relaxed); }
 
     // Static curve for the editor's transfer display (uses current parameters).
     float getStaticReductionDb(float inputDb) const noexcept;
@@ -93,6 +98,8 @@ public:
 
 private:
     CompressorEngine::Settings readSettings() const noexcept;
+    void updateEngineSettings(bool force) noexcept;
+    bool isMidSideRequested() const noexcept;
 
     juce::AudioProcessorValueTreeState apvts;
 
@@ -107,14 +114,19 @@ private:
     std::atomic<float>* makeupParam {};
     std::atomic<float>* mixParam {};
     std::atomic<float>* linkParam {};
+    std::atomic<float>* midSideParam {};
     juce::AudioParameterBool* bypassParam {};
 
-    CompressorEngine engine;
+    // Both engines run on stereo input so that switching between L/R and M/S
+    // crossfades between two warm detectors instead of clicking.
+    CompressorEngine stereoEngine, midSideEngine;
 
-    juce::SmoothedValue<float> inputGain, makeupGain, wetMix, processedAmount;
+    juce::SmoothedValue<float> inputGain, makeupGain, wetMix, processedAmount, midSideAmount;
+    std::atomic<int> processedChannels { 2 };
 
     std::array<PeakAccumulator, 2> inputPeaks, outputPeaks;
     PeakAccumulator gainReductionPeak;
+    std::array<PeakAccumulator, 2> channelReductionPeaks;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(PresstoAudioProcessor)
 };

@@ -14,6 +14,7 @@ inline const juce::Colour textSecondary { 0xff8b909b };
 inline const juce::Colour textDim { 0xff5a5f6a };
 inline const juce::Colour accent { 0xfff0a53a };      // amber: controls + gain reduction
 inline const juce::Colour link { 0xff58c4dc };        // teal: stereo link / levels
+inline const juce::Colour midSide { 0xffb08cf0 };     // violet: mid/side
 inline const juce::Colour bypass { 0xffe5534b };      // red: bypass / clip
 inline const juce::Colour levelLow { 0xff4fd1a5 };
 inline const juce::Colour levelMid { 0xffe8d25a };

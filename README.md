@@ -20,7 +20,8 @@ behaviour of the Charter Oak SCL-1. See [docs/DESIGN.md](docs/DESIGN.md) for the
 | **Input** | Gain before the compressor (±24 dB). |
 | **Makeup** | Gain after the compressor and mix (-12 to +24 dB). |
 | **Mix** | Dry/wet blend for parallel compression. |
-| **Stereo Link** | On: both channels share one detector, so the image never shifts. Off: dual mono. |
+| **Stereo Link** | On: both channels share one detector, so the image never shifts. Off: dual mono. Disabled in Mid/Side mode. |
+| **Mid/Side** | Stereo tracks only. Compresses the centre (mid) and the stereo width (side) independently, then decodes back to L/R. The GR meter splits into M and S bars. Switching is click-free. |
 | **Bypass** | Click-free. Also mapped to the host's bypass. |
 
 Tips:
@@ -28,6 +29,7 @@ Tips:
 * Double-click any knob to reset it.
 * Click a value to type a new one. Units work, e.g. `1.2 s` or `off`.
 * Click a meter to reset its peak hold.
+* When channels are compressed independently (Mid/Side, or Stereo Link off), the GR meter shows two bars.
 * Drag the bottom-right corner to resize the window (75 % to 200 %).
 
 ## Building
@@ -88,7 +90,8 @@ ctest --preset linux-release              # on Linux without a display: xvfb-run
 * `PresstoEngineTests` checks the DSP: static curve, distortion, program-dependent release, stereo link
   and the sidechain filter.
 * `PresstoPluginTests` loads the real processor and editor. It checks that every knob and button drives
-  the right parameter, and checks bypass, mix, gain, link and state restore. Run it with
+  the right parameter, and checks bypass, mix, gain, link, mid/side (including click-free switching and
+  mono tracks) and state restore. Run it with
   `--snapshot <dir>` to render the editor to PNG.
 
 CI (`.github/workflows/build.yml`) builds on Linux, macOS (universal) and Windows. It runs both test

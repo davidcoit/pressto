@@ -82,6 +82,23 @@ GR       = peak
 The last two rows show the program-dependent release at work: transients recover more than three times
 faster than sustained material at the same release setting.
 
+### Mid/side mode
+
+The input (after the Input trim) is encoded as M = (L + R) / 2 and S = (L − R) / 2. Mid and side each get
+their own detector, always unlinked, because linking them would make M/S identical to linked L/R. The
+compressed M and S are then decoded as L = M + S and R = M − S. With no compression the round trip is
+exact, and on mono content (S = 0) the output is sample-identical to linked L/R.
+
+Two engines (L/R and M/S) run side by side on stereo input, so both detectors are always warm. Toggling
+the mode crossfades between their outputs over 20 ms instead of switching abruptly. The test suite
+measures this: a hard switch produces a discontinuity about 2500× the steady-state signal curvature,
+while the crossfade stays within about 3×. The cost is a second detector per channel, which is small next
+to the rest of the plugin. On mono tracks the switch is disabled and has no effect.
+
+The SCL-1 has no mid/side mode (its modes are stereo and dual mono). This is a Pressto addition.
+
+![Mid/side mode](editor-midside.png)
+
 ### Not modelled, and why
 
 * **Transformers and the discrete FET cell's own colouration.** These are deliberately left out, because

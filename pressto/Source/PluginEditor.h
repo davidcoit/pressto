@@ -28,8 +28,12 @@ private:
     Knob threshold, ratio, knee, attack, release;
     Knob program, scHpf, input, makeup, mix;
 
-    juce::TextButton linkButton { "STEREO LINK" }, bypassButton { "BYPASS" };
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> linkAttachment, bypassAttachment;
+    void updateModeControls();
+
+    juce::TextButton midSideButton { "MID/SIDE" }, linkButton { "STEREO LINK" }, bypassButton { "BYPASS" };
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> midSideAttachment, linkAttachment, bypassAttachment;
+    std::atomic<float>* midSideParam {};
+    std::atomic<float>* linkParam {};
 
     LevelMeter inputMeter { "IN", true }, outputMeter { "OUT", false };
     GainReductionMeter grMeter;

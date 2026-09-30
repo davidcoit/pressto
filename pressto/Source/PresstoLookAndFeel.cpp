@@ -107,6 +107,11 @@ void PresstoLookAndFeel::drawButtonBackground(juce::Graphics& g, juce::Button& b
     const float radius = bounds.getHeight() * 0.5f;
     const auto onColour = button.findColour(juce::TextButton::buttonOnColourId);
 
+    // Disabled buttons (e.g. link while in mid/side) fade back but keep their state visible.
+    g.setOpacity(button.isEnabled() ? 1.0f : 0.35f);
+    if (! button.isEnabled())
+        highlighted = down = false;
+
     if (button.getToggleState())
     {
         g.setColour(down ? onColour.darker(0.2f) : (highlighted ? onColour.brighter(0.1f) : onColour));
@@ -129,18 +134,21 @@ juce::Font PresstoLookAndFeel::getTextButtonFont(juce::TextButton&, int buttonHe
 void PresstoLookAndFeel::drawButtonText(juce::Graphics& g, juce::TextButton& button, bool, bool)
 {
     const bool on = button.getToggleState();
+    const float alpha = button.isEnabled() ? 1.0f : 0.35f;
     const auto bounds = button.getLocalBounds().toFloat();
     const float dot = bounds.getHeight() * 0.22f;
     const auto onColour = button.findColour(juce::TextButton::buttonOnColourId);
 
     // Status LED on the left, text centred in the remaining space.
     auto ledArea = juce::Rectangle<float>(dot, dot).withCentre({ bounds.getX() + bounds.getHeight() * 0.55f, bounds.getCentreY() });
-    g.setColour(on ? Palette::background.withAlpha(0.75f) : Palette::textDim);
+    g.setColour((on ? Palette::background.withAlpha(0.75f) : Palette::textDim).withMultipliedAlpha(alpha));
     g.fillEllipse(ledArea);
 
     g.setFont(getTextButtonFont(button, button.getHeight()));
-    g.setColour(on ? button.findColour(juce::TextButton::textColourOnId)
-                   : (button.isMouseOver() ? onColour : button.findColour(juce::TextButton::textColourOffId)));
+    const bool hover = button.isEnabled() && button.isMouseOver();
+    g.setColour((on ? button.findColour(juce::TextButton::textColourOnId)
+                    : (hover ? onColour : button.findColour(juce::TextButton::textColourOffId)))
+                    .withMultipliedAlpha(alpha));
     g.drawText(button.getButtonText(), bounds.withTrimmedLeft(bounds.getHeight() * 0.6f), juce::Justification::centred, false);
 }
 

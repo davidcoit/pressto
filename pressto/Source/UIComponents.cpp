@@ -183,27 +183,42 @@ GainReductionMeter::GainReductionMeter()
     setTooltip("Gain reduction (dB). The number shows the deepest reduction recently; click to reset it.");
 }
 
-void GainReductionMeter::update(float reductionDb, float dt)
+void GainReductionMeter::setChannelLabels(const juce::String& first, const juce::String& second)
+{
+    if (labels[0] != first || labels[1] != second)
+    {
+        labels = { first, second };
+        repaint();
+    }
+}
+
+void GainReductionMeter::update(const std::array<float, 2>& reductionDb, float dt)
 {
     constexpr float returnDbPerSecond = 30.0f;
-    displayDb = reductionDb >= displayDb ? reductionDb : juce::jmax(reductionDb, displayDb - returnDbPerSecond * dt);
+    constexpr float holdSeconds = 2.0f;
 
-    holdAge += dt;
-    if (reductionDb >= holdDb)
+    for (size_t ch = 0; ch < 2; ++ch)
     {
-        holdDb = reductionDb;
-        holdAge = 0.0f;
-    }
-    else if (holdAge > 2.0f)
-    {
-        holdDb = displayDb;
+        const float db = split() ? reductionDb[ch] : juce::jmax(reductionDb[0], reductionDb[1]);
+        displayDb[ch] = db >= displayDb[ch] ? db : juce::jmax(db, displayDb[ch] - returnDbPerSecond * dt);
+
+        holdAge[ch] += dt;
+        if (db >= holdDb[ch])
+        {
+            holdDb[ch] = db;
+            holdAge[ch] = 0.0f;
+        }
+        else if (holdAge[ch] > holdSeconds)
+        {
+            holdDb[ch] = displayDb[ch];
+        }
     }
 }
 
 void GainReductionMeter::mouseDown(const juce::MouseEvent&)
 {
     holdDb = displayDb;
-    holdAge = 0.0f;
+    holdAge = {};
     repaint();
 }
 
@@ -212,36 +227,53 @@ void GainReductionMeter::paint(juce::Graphics& g)
     auto area = getLocalBounds().toFloat();
     drawCaption(g, "GR", area.removeFromTop(16.0f));
 
+    const float maxHold = juce::jmax(holdDb[0], holdDb[1]);
     auto readout = area.removeFromBottom(22.0f);
-    g.setColour(holdDb > 0.05f ? Palette::accent : Palette::textPrimary);
+    g.setColour(maxHold > 0.05f ? Palette::accent : Palette::textPrimary);
     g.setFont(Fonts::make(12.0f));
-    g.drawText(holdDb > 0.05f ? "-" + juce::String(holdDb, 1) : juce::String("0.0"), readout, juce::Justification::centred, false);
+    g.drawText(maxHold > 0.05f ? "-" + juce::String(maxHold, 1) : juce::String("0.0"), readout, juce::Justification::centred, false);
 
     area.removeFromBottom(4.0f);
     drawWell(g, area, 4.0f);
-    auto bar = area.reduced(4.0f);
+    auto inner = area.reduced(4.0f);
 
-    const auto toY = [&](float db) { return bar.getY() + juce::jlimit(0.0f, 1.0f, db / rangeDb) * bar.getHeight(); };
+    const int numBars = split() ? 2 : 1;
+    const float gap = 3.0f;
+    const float barWidth = (inner.getWidth() - gap * (float) (numBars - 1)) / (float) numBars;
+    const auto toY = [&](float db) { return inner.getY() + juce::jlimit(0.0f, 1.0f, db / rangeDb) * inner.getHeight(); };
 
-    g.setColour(Palette::grid.withAlpha(0.6f));
-    g.fillRoundedRectangle(bar, 2.0f);
-
-    if (displayDb > 0.01f)
+    for (int b = 0; b < numBars; ++b)
     {
-        g.setGradientFill(juce::ColourGradient(Palette::accent.withAlpha(0.85f), 0.0f, bar.getY(),
-                                               Palette::accent.darker(0.5f), 0.0f, bar.getBottom(), false));
-        g.fillRoundedRectangle(bar.withBottom(toY(displayDb)), 2.0f);
-    }
+        const auto ch = (size_t) b;
+        const auto bar = juce::Rectangle<float>(inner.getX() + (float) b * (barWidth + gap), inner.getY(), barWidth, inner.getHeight());
 
-    if (holdDb > 0.05f)
-    {
-        g.setColour(Palette::textPrimary.withAlpha(0.8f));
-        g.fillRect(bar.getX(), toY(holdDb) - 1.0f, bar.getWidth(), 2.0f);
+        g.setColour(Palette::grid.withAlpha(0.6f));
+        g.fillRoundedRectangle(bar, 2.0f);
+
+        if (displayDb[ch] > 0.01f)
+        {
+            g.setGradientFill(juce::ColourGradient(Palette::accent.withAlpha(0.85f), 0.0f, bar.getY(),
+                                                   Palette::accent.darker(0.5f), 0.0f, bar.getBottom(), false));
+            g.fillRoundedRectangle(bar.withBottom(toY(displayDb[ch])), 2.0f);
+        }
+
+        if (holdDb[ch] > 0.05f)
+        {
+            g.setColour(Palette::textPrimary.withAlpha(0.8f));
+            g.fillRect(bar.getX(), toY(holdDb[ch]) - 1.0f, bar.getWidth(), 2.0f);
+        }
+
+        if (split())
+        {
+            g.setColour(Palette::textSecondary);
+            g.setFont(Fonts::make(10.0f, true));
+            g.drawText(labels[ch], bar.withTop(bar.getBottom() - 14.0f), juce::Justification::centred, false);
+        }
     }
 
     g.setColour(Palette::textDim.withAlpha(0.5f));
     for (float db : { 3.0f, 6.0f, 12.0f, 18.0f })
-        g.fillRect(bar.getX(), toY(db), bar.getWidth(), 1.0f);
+        g.fillRect(inner.getX(), toY(db), inner.getWidth(), 1.0f);
 }
 
 //==============================================================================

@@ -53,22 +53,29 @@ private:
     float clipAge = 1.0e9f;
 };
 
-// Vertical gain-reduction bar that grows downwards from 0 dB.
+// Gain-reduction bars that grow downwards from 0 dB. Shows one bar, or two
+// labelled bars (e.g. "L"/"R" or "M"/"S") when the channels are compressed
+// independently.
 class GainReductionMeter : public juce::Component, public juce::SettableTooltipClient
 {
 public:
     GainReductionMeter();
 
-    void update(float reductionDb, float dtSeconds);
+    // Empty labels = single combined bar.
+    void setChannelLabels(const juce::String& first, const juce::String& second);
+    void update(const std::array<float, 2>& reductionDb, float dtSeconds);
     void paint(juce::Graphics&) override;
     void mouseDown(const juce::MouseEvent&) override;
 
     static constexpr float rangeDb = 24.0f;
 
 private:
-    float displayDb = 0.0f;
-    float holdDb = 0.0f;
-    float holdAge = 0.0f;
+    bool split() const { return labels[0].isNotEmpty(); }
+
+    std::array<juce::String, 2> labels;
+    std::array<float, 2> displayDb {};
+    std::array<float, 2> holdDb {};
+    std::array<float, 2> holdAge {};
 };
 
 // Static input/output transfer curve with a live operating-point marker.

@@ -96,6 +96,7 @@ PresstoAudioProcessor::PresstoAudioProcessor()
     makeupParam = apvts.getRawParameterValue(ParamIDs::makeup);
     mixParam = apvts.getRawParameterValue(ParamIDs::mix);
     linkParam = apvts.getRawParameterValue(ParamIDs::link);
+    midSideParam = apvts.getRawParameterValue(ParamIDs::midSide);
     bypassParam = dynamic_cast<juce::AudioParameterBool*>(apvts.getParameter(ParamIDs::bypass));
     jassert(bypassParam != nullptr);
 }
@@ -120,6 +121,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout PresstoAudioProcessor::creat
     layout.add(makeFloat(ParamIDs::mix, "Mix", { 0.0f, 100.0f, 1.0f }, 100.0f, "%", percent));
 
     layout.add(std::make_unique<juce::AudioParameterBool>(juce::ParameterID { ParamIDs::link, 1 }, "Stereo Link", true));
+    layout.add(std::make_unique<juce::AudioParameterBool>(juce::ParameterID { ParamIDs::midSide, 1 }, "Mid/Side", false));
     layout.add(std::make_unique<juce::AudioParameterBool>(juce::ParameterID { ParamIDs::bypass, 1 }, "Bypass", false));
 
     return layout;
@@ -141,22 +143,41 @@ CompressorEngine::Settings PresstoAudioProcessor::readSettings() const noexcept
 
 void PresstoAudioProcessor::prepareToPlay(double sampleRate, int)
 {
-    engine.prepare(sampleRate);
-    engine.setSettings(readSettings(), true);
+    for (auto* e : { &stereoEngine, &midSideEngine })
+        e->prepare(sampleRate);
+    updateEngineSettings(true);
 
     constexpr double smoothingSeconds = 0.02;
-    for (auto* smoother : { &inputGain, &makeupGain, &wetMix, &processedAmount })
+    for (auto* smoother : { &inputGain, &makeupGain, &wetMix, &processedAmount, &midSideAmount })
         smoother->reset(sampleRate, smoothingSeconds);
 
     inputGain.setCurrentAndTargetValue(dbToGain(inputParam->load()));
     makeupGain.setCurrentAndTargetValue(dbToGain(makeupParam->load()));
     wetMix.setCurrentAndTargetValue(mixParam->load() * 0.01f);
     processedAmount.setCurrentAndTargetValue(bypassParam->get() ? 0.0f : 1.0f);
+    midSideAmount.setCurrentAndTargetValue(isMidSideRequested() ? 1.0f : 0.0f);
 }
 
 void PresstoAudioProcessor::releaseResources()
 {
-    engine.reset();
+    stereoEngine.reset();
+    midSideEngine.reset();
+}
+
+void PresstoAudioProcessor::updateEngineSettings(bool force) noexcept
+{
+    auto settings = readSettings();
+    stereoEngine.setSettings(settings, force);
+
+    // Mid and side are always detected independently: linking them would make
+    // M/S compression identical to linked L/R compression.
+    settings.stereoLink = false;
+    midSideEngine.setSettings(settings, force);
+}
+
+bool PresstoAudioProcessor::isMidSideRequested() const noexcept
+{
+    return midSideParam->load() >= 0.5f && getTotalNumInputChannels() == 2;
 }
 
 bool PresstoAudioProcessor::isBusesLayoutSupported(const BusesLayout& layouts) const
@@ -180,23 +201,29 @@ void PresstoAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce:
         buffer.clear(ch, 0, numSamples);
 
     const int numChannels = juce::jmin(numInputs, CompressorEngine::maxChannels);
+    processedChannels.store(numChannels, std::memory_order_relaxed);
     if (numChannels == 0 || numSamples == 0)
         return;
 
-    engine.setSettings(readSettings());
+    const bool stereo = numChannels == 2;
+
+    updateEngineSettings(false);
     inputGain.setTargetValue(dbToGain(inputParam->load()));
     makeupGain.setTargetValue(dbToGain(makeupParam->load()));
     wetMix.setTargetValue(mixParam->load() * 0.01f);
     processedAmount.setTargetValue(bypassParam->get() ? 0.0f : 1.0f);
+    midSideAmount.setTargetValue(isMidSideRequested() ? 1.0f : 0.0f);
 
     std::array<float*, CompressorEngine::maxChannels> data {};
     for (int ch = 0; ch < numChannels; ++ch)
         data[(size_t) ch] = buffer.getWritePointer(ch);
 
-    std::array<float, 2> inPeak {}, outPeak {};
-    float grPeak = 0.0f;
+    std::array<float, 2> inPeak {}, outPeak {}, grPeak {};
     float trimmed[CompressorEngine::maxChannels] {};
-    float reductionDb[CompressorEngine::maxChannels] {};
+    float compressed[CompressorEngine::maxChannels] {};
+    float reductionLR[CompressorEngine::maxChannels] {};
+    float midSide[CompressorEngine::maxChannels] {};
+    float reductionMS[CompressorEngine::maxChannels] {};
 
     for (int i = 0; i < numSamples; ++i)
     {
@@ -204,23 +231,44 @@ void PresstoAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce:
         const float outGain = makeupGain.getNextValue();
         const float mix = wetMix.getNextValue();
         const float amount = processedAmount.getNextValue();
+        const float msAmount = midSideAmount.getNextValue();
 
         for (int ch = 0; ch < numChannels; ++ch)
             trimmed[ch] = data[(size_t) ch][i] * inGain;
 
-        engine.processFrame(trimmed, numChannels, reductionDb);
+        stereoEngine.processFrame(trimmed, numChannels, reductionLR);
+        for (int ch = 0; ch < numChannels; ++ch)
+            compressed[ch] = trimmed[ch] * dbToGain(-reductionLR[ch]);
+
+        if (stereo)
+        {
+            // Encode, compress mid and side independently, decode.
+            midSide[0] = 0.5f * (trimmed[0] + trimmed[1]);
+            midSide[1] = 0.5f * (trimmed[0] - trimmed[1]);
+            midSideEngine.processFrame(midSide, 2, reductionMS);
+
+            const float mid = midSide[0] * dbToGain(-reductionMS[0]);
+            const float side = midSide[1] * dbToGain(-reductionMS[1]);
+
+            if (msAmount > 0.0f)
+            {
+                compressed[0] += msAmount * ((mid + side) - compressed[0]);
+                compressed[1] += msAmount * ((mid - side) - compressed[1]);
+            }
+        }
 
         for (int ch = 0; ch < numChannels; ++ch)
         {
             const float dry = data[(size_t) ch][i];
-            const float compressed = trimmed[ch] * dbToGain(-reductionDb[ch]);
-            const float processed = (trimmed[ch] + mix * (compressed - trimmed[ch])) * outGain;
+            const float processed = (trimmed[ch] + mix * (compressed[ch] - trimmed[ch])) * outGain;
             const float out = dry + amount * (processed - dry);
             data[(size_t) ch][i] = out;
 
             inPeak[(size_t) ch] = juce::jmax(inPeak[(size_t) ch], std::abs(trimmed[ch]));
             outPeak[(size_t) ch] = juce::jmax(outPeak[(size_t) ch], std::abs(out));
-            grPeak = juce::jmax(grPeak, reductionDb[ch] * amount);
+
+            const float gr = stereo ? reductionLR[ch] + msAmount * (reductionMS[ch] - reductionLR[ch]) : reductionLR[ch];
+            grPeak[(size_t) ch] = juce::jmax(grPeak[(size_t) ch], gr * amount);
         }
     }
 
@@ -229,14 +277,16 @@ void PresstoAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce:
     {
         inPeak[1] = inPeak[0];
         outPeak[1] = outPeak[0];
+        grPeak[1] = grPeak[0];
     }
 
     for (size_t ch = 0; ch < 2; ++ch)
     {
         inputPeaks[ch].push(inPeak[ch]);
         outputPeaks[ch].push(outPeak[ch]);
+        channelReductionPeaks[ch].push(grPeak[ch]);
     }
-    gainReductionPeak.push(grPeak);
+    gainReductionPeak.push(juce::jmax(grPeak[0], grPeak[1]));
 }
 
 PresstoAudioProcessor::MeterReadings PresstoAudioProcessor::takeMeterReadings() noexcept
@@ -248,6 +298,8 @@ PresstoAudioProcessor::MeterReadings PresstoAudioProcessor::takeMeterReadings() 
         r.outputPeak[ch] = outputPeaks[ch].take();
     }
     r.gainReductionDb = gainReductionPeak.take();
+    for (size_t ch = 0; ch < 2; ++ch)
+        r.channelReductionDb[ch] = channelReductionPeaks[ch].take();
     return r;
 }
 
